@@ -1,14 +1,4 @@
 // api/events.js
-//
-// Vercel serverless function. This is the ONLY place your GHL API key lives.
-// It never touches the browser. The public page calls this endpoint, and this
-// endpoint calls GHL on the server, filters down to Approved events only, and
-// strips out anything sensitive before responding.
-//
-// Required environment variables (set in Vercel project settings, NOT in this file):
-//   GHL_API_KEY       -> your Private Integration token (pit-...)
-//   GHL_LOCATION_ID    -> oCFoDfYKs6n7V2heFMXW
-
 const GHL_BASE = "https://services.leadconnectorhq.com";
 const API_VERSION = "2021-07-28";
 const PIPELINE_NAME = "Event Requests";
@@ -42,7 +32,7 @@ async function getApprovedStageId(locationId) {
   const stage = (pipeline.stages || []).find(
     (s) => (s.name || "").trim().toLowerCase() === APPROVED_STAGE_NAME.toLowerCase()
   );
-  if (!stage) throw new Error(`Stage "${APPROVED_STAGE_NAME}" not found in pipeline "${PIPELINE_NAME}"`);
+  if (!stage) throw new Error(`Stage "${APPROVED_STAGE_NAME}" not found`);
   stageCache = { pipelineId: pipeline.id, stageId: stage.id, expires: Date.now() + ONE_HOUR };
   return { pipelineId: pipeline.id, stageId: stage.id };
 }
@@ -64,7 +54,7 @@ async function getOpportunityFieldMap(locationId) {
     }
   }
   fieldMapCache = { map, expires: Date.now() + ONE_HOUR };
-  return map;
+  return { map, rawFieldCount: fields.length, rawFieldSample: fields.slice(0, 3) };
 }
 
 function extractCustomFieldValue(entry) {
@@ -84,7 +74,9 @@ function classifyEventType(rawType) {
 
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "public, max-age=120, s-maxage=120, stale-while-revalidate=300");
+  res.setHeader("Cache-Control", "no-store");
+
+  const debug = req.query && req.query.debug === "gwe2026";
 
   try {
     const locationId = process.env.GHL_LOCATION_ID;
@@ -93,7 +85,8 @@ module.exports = async (req, res) => {
     }
 
     const { pipelineId, stageId } = await getApprovedStageId(locationId);
-    const fieldMap = await getOpportunityFieldMap(locationId);
+    const fieldMapResult = await getOpportunityFieldMap(locationId);
+    const fieldMap = fieldMapResult.map || fieldMapCache.map;
 
     const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
     searchUrl.searchParams.set("location_id", locationId);
@@ -129,7 +122,6 @@ module.exports = async (req, res) => {
         const type = classifyEventType(e.f.event_type);
         const priceRaw = (e.f.ticket_price || "").toString().replace(/^\$/, "").trim();
         const price = type.key === "open" || !priceRaw ? "FREE" : `$${priceRaw} per person`;
-
         return {
           id: e.id,
           eventName: e.f.event_name || "GWE Event",
@@ -154,9 +146,22 @@ module.exports = async (req, res) => {
         };
       });
 
-    res.status(200).json({ events });
+    const responseBody = { events };
+    if (debug) {
+      responseBody._debug = {
+        pipelineId,
+        stageId,
+        fieldMapSize: Object.keys(fieldMap || {}).length,
+        fieldMapSample: Object.entries(fieldMap || {}).slice(0, 5),
+        rawFieldCount: fieldMapResult.rawFieldCount,
+        rawFieldSample: fieldMapResult.rawFieldSample,
+        opportunityCount: opportunities.length,
+        rawOpportunitySample: opportunities.slice(0, 2),
+      };
+    }
+
+    res.status(200).json(responseBody);
   } catch (err) {
-    console.error("GWE events proxy error:", err);
-    res.status(500).json({ error: "Unable to load events", events: [] });
+    res.status(500).json({ error: "Unable to load events", message: err.message, events: [] });
   }
 };
