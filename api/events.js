@@ -4,6 +4,25 @@ const API_VERSION = "2021-07-28";
 const PIPELINE_NAME = "Event Requests";
 const APPROVED_STAGE_NAME = "Approved";
 
+// Opportunity custom field IDs, hardcoded. GHL's API has no working endpoint
+// to list Opportunity-level custom field definitions (confirmed via testing
+// and their docs), so these were read directly off a real record. IDs are
+// permanent unless a field is deleted and recreated from scratch.
+const FIELD_IDS = {
+  event_name: "aRhl6N9b5RVYr2JwCExF",
+  event_type: "icoC1eZHZg61RQrJhfni",
+  event_date: "M37qBoXrRB4fzBUlNvIe",
+  start_time: "cSCUwB09c1YN2ObqWkZH",
+  end_time: "Bwz6MwBc4upEsXoPFgnl",
+  real_location__address: "gj7tr1JJFc3siNy3J9SE",
+  public_location_label: "rIxuaszjHEspjIOJ0Hmk",
+  prep_notes__what_to_bring: "bycoh2snbaeMyyyNIWlU",
+  ticket_price: "uechl93Ol4u99BlarbeS",
+  purchase_link: "c2qugZJBI14w3LfD2PQp",
+  max_attendees: "AnMzsPUueUUP8JQp8fAo",
+};
+const ID_TO_KEY = Object.fromEntries(Object.entries(FIELD_IDS).map(([k, v]) => [v, k]));
+
 function ghlHeaders() {
   return {
     Authorization: `Bearer ${process.env.GHL_API_KEY}`,
@@ -13,7 +32,6 @@ function ghlHeaders() {
 }
 
 let stageCache = { pipelineId: null, stageId: null, expires: 0 };
-let fieldMapCache = { map: null, expires: 0 };
 const ONE_HOUR = 60 * 60 * 1000;
 
 async function getApprovedStageId(locationId) {
@@ -37,28 +55,14 @@ async function getApprovedStageId(locationId) {
   return { pipelineId: pipeline.id, stageId: stage.id };
 }
 
-async function getOpportunityFieldMap(locationId) {
-  if (fieldMapCache.map && fieldMapCache.expires > Date.now()) {
-    return fieldMapCache.map;
-  }
-  const res = await fetch(`${GHL_BASE}/locations/${locationId}/customFields`, {
-    headers: ghlHeaders(),
-  });
-  if (!res.ok) throw new Error(`Custom fields lookup failed: ${res.status}`);
-  const data = await res.json();
-  const fields = data.customFields || data.fields || [];
-  const map = {};
-  for (const f of fields) {
-    if (f.fieldKey && f.fieldKey.startsWith("opportunity.")) {
-      map[f.id] = f.fieldKey.replace("opportunity.", "");
-    }
-  }
-  fieldMapCache = { map, expires: Date.now() + ONE_HOUR };
-  return { map, rawFieldCount: fields.length, rawFieldSample: fields.slice(0, 3) };
-}
-
 function extractCustomFieldValue(entry) {
-  return entry.fieldValueString ?? entry.value ?? entry.fieldValue ?? "";
+  if (entry.fieldValueString !== undefined) return entry.fieldValueString;
+  if (entry.fieldValueNumber !== undefined) return String(entry.fieldValueNumber);
+  if (entry.fieldValueDate !== undefined) {
+    const d = new Date(entry.fieldValueDate);
+    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  }
+  return entry.value ?? entry.fieldValue ?? "";
 }
 
 function classifyEventType(rawType) {
@@ -70,6 +74,13 @@ function classifyEventType(rawType) {
     return { key: "external", badgeClass: "gwe-badge-external", badgeLabel: "Ticket purchase required" };
   }
   return { key: "ticketed", badgeClass: "gwe-badge-ticketed", badgeLabel: "Ticket purchase required" };
+}
+
+async function getFreshOpportunity(id) {
+  const res = await fetch(`${GHL_BASE}/opportunities/${id}`, { headers: ghlHeaders() });
+  if (!res.ok) throw new Error(`Get opportunity ${id} failed: ${res.status}`);
+  const data = await res.json();
+  return data.opportunity || data;
 }
 
 module.exports = async (req, res) => {
@@ -85,8 +96,6 @@ module.exports = async (req, res) => {
     }
 
     const { pipelineId, stageId } = await getApprovedStageId(locationId);
-    const fieldMapResult = await getOpportunityFieldMap(locationId);
-    const fieldMap = fieldMapResult.map || fieldMapCache.map;
 
     const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
     searchUrl.searchParams.set("location_id", locationId);
@@ -97,17 +106,20 @@ module.exports = async (req, res) => {
     const oppRes = await fetch(searchUrl.toString(), { headers: ghlHeaders() });
     if (!oppRes.ok) throw new Error(`Opportunity search failed: ${oppRes.status}`);
     const oppData = await oppRes.json();
-    const opportunities = oppData.opportunities || [];
+    const candidateIds = (oppData.opportunities || [])
+      .filter((o) => o.pipelineStageId === stageId)
+      .map((o) => o.id);
+
+    const freshOpps = await Promise.all(candidateIds.map(getFreshOpportunity));
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const events = opportunities
-      .filter((o) => o.pipelineStageId === stageId)
+    const events = freshOpps
       .map((o) => {
         const f = {};
         for (const cf of o.customFields || []) {
-          const key = fieldMap[cf.id];
+          const key = ID_TO_KEY[cf.id];
           if (key) f[key] = extractCustomFieldValue(cf);
         }
         return { id: o.id, f };
@@ -121,7 +133,7 @@ module.exports = async (req, res) => {
       .map((e) => {
         const type = classifyEventType(e.f.event_type);
         const priceRaw = (e.f.ticket_price || "").toString().replace(/^\$/, "").trim();
-        const price = type.key === "open" || !priceRaw ? "FREE" : `$${priceRaw} per person`;
+        const price = type.key === "open" || !priceRaw || priceRaw === "0" ? "FREE" : `$${priceRaw} per person`;
         return {
           id: e.id,
           eventName: e.f.event_name || "GWE Event",
@@ -148,16 +160,7 @@ module.exports = async (req, res) => {
 
     const responseBody = { events };
     if (debug) {
-      responseBody._debug = {
-        pipelineId,
-        stageId,
-        fieldMapSize: Object.keys(fieldMap || {}).length,
-        fieldMapSample: Object.entries(fieldMap || {}).slice(0, 5),
-        rawFieldCount: fieldMapResult.rawFieldCount,
-        rawFieldSample: fieldMapResult.rawFieldSample,
-        opportunityCount: opportunities.length,
-        rawOpportunitySample: opportunities.slice(0, 2),
-      };
+      responseBody._debug = { pipelineId, stageId, candidateIds, freshOpportunitySample: freshOpps.slice(0, 1) };
     }
 
     res.status(200).json(responseBody);
