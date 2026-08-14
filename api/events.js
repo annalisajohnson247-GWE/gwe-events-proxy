@@ -4,15 +4,15 @@ const API_VERSION = "2021-07-28";
 const PIPELINE_NAME = "Event Requests";
 const APPROVED_STAGE_NAME = "Approved";
 
-// Opportunity custom field IDs, hardcoded. GHL's API has no working endpoint
-// to list Opportunity-level custom field definitions (confirmed via testing
-// and their docs), so these were read directly off a real record. IDs are
+// Opportunity custom field IDs, hardcoded and verified against real records.
+// GHL's API has no working endpoint to list Opportunity-level custom field
+// definitions, so these were read directly off a live opportunity. IDs are
 // permanent unless a field is deleted and recreated from scratch.
 const FIELD_IDS = {
   event_name: "aRhl6N9b5RVYr2JwCExF",
   event_type: "icoC1eZHZg61RQrJhfni",
   event_date: "M37qBoXrRB4fzBUlNvIe",
-  start_time: "cSCUwB09c1YN2ObqWkZH",
+  start_time: "3vBH6RNIjjhoZJuoqkh4",
   end_time: "Bwz6MwBc4upEsXoPFgnl",
   real_location__address: "gj7tr1JJFc3siNy3J9SE",
   public_location_label: "rIxuaszjHEspjIOJ0Hmk",
@@ -56,13 +56,16 @@ async function getApprovedStageId(locationId) {
 }
 
 function extractCustomFieldValue(entry) {
+  if (entry.fieldValue !== undefined && entry.fieldValue !== null) {
+    return typeof entry.fieldValue === "number" ? String(entry.fieldValue) : entry.fieldValue;
+  }
   if (entry.fieldValueString !== undefined) return entry.fieldValueString;
   if (entry.fieldValueNumber !== undefined) return String(entry.fieldValueNumber);
   if (entry.fieldValueDate !== undefined) {
     const d = new Date(entry.fieldValueDate);
     return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
   }
-  return entry.value ?? entry.fieldValue ?? "";
+  return "";
 }
 
 function classifyEventType(rawType) {
@@ -85,9 +88,7 @@ async function getFreshOpportunity(id) {
 
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "no-store");
-
-  const debug = req.query && req.query.debug === "gwe2026";
+  res.setHeader("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=180");
 
   try {
     const locationId = process.env.GHL_LOCATION_ID;
@@ -158,13 +159,8 @@ module.exports = async (req, res) => {
         };
       });
 
-    const responseBody = { events };
-    if (debug) {
-      responseBody._debug = { pipelineId, stageId, candidateIds, freshOpportunitySample: freshOpps.slice(0, 1) };
-    }
-
-    res.status(200).json(responseBody);
+    res.status(200).json({ events });
   } catch (err) {
-    res.status(500).json({ error: "Unable to load events", message: err.message, events: [] });
+    res.status(500).json({ error: "Unable to load events", events: [] });
   }
 };
