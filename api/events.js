@@ -158,6 +158,7 @@ module.exports = async (req, res) => {
             rsvp_prep_notes: e.f.prep_notes__what_to_bring || "",
             rsvp_ticket_price: e.f.ticket_price || "",
             rsvp_purchase_link: e.f.purchase_link || "",
+            rsvp_city: e.f.city || "",
           },
         };
       });
