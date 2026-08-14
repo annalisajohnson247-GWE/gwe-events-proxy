@@ -4,10 +4,11 @@ const API_VERSION = "2021-07-28";
 const PIPELINE_NAME = "Event Requests";
 const APPROVED_STAGE_NAME = "Approved";
 
-// Opportunity custom field IDs, hardcoded and verified against real records.
-// GHL's API has no working endpoint to list Opportunity-level custom field
-// definitions, so these were read directly off a live opportunity. IDs are
-// permanent unless a field is deleted and recreated from scratch.
+// Opportunity custom field IDs, hardcoded and verified character-by-character
+// against real records. GHL's API has no working endpoint to list
+// Opportunity-level custom field definitions, so these were read directly
+// off a live opportunity. IDs are permanent unless a field is deleted and
+// recreated from scratch.
 const FIELD_IDS = {
   event_name: "aRhl6N9b5RVYr2JwCExF",
   event_type: "icoC1eZHZg61RQrJhfni",
@@ -18,7 +19,7 @@ const FIELD_IDS = {
   public_location_label: "rIxuaszjHEspjIOJ0Hmk",
   prep_notes__what_to_bring: "bycoh2snbaeMyyyNIWlU",
   ticket_price: "uechl93Ol4u99BlarbeS",
-  purchase_link: "c2qugZJBI14w3LfD2PQp",
+  purchase_link: "c2qugZJBIl4w3LfD2PQp",
   max_attendees: "AnMzsPUueUUP8JQp8fAo",
 };
 const ID_TO_KEY = Object.fromEntries(Object.entries(FIELD_IDS).map(([k, v]) => [v, k]));
@@ -87,27 +88,6 @@ async function getFreshOpportunity(id) {
 }
 
 module.exports = async (req, res) => {
-  if (req.query && req.query.showids === "1") {
-    try {
-      const locationId = process.env.GHL_LOCATION_ID;
-      const { pipelineId, stageId } = await getApprovedStageId(locationId);
-      const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
-      searchUrl.searchParams.set("location_id", locationId);
-      searchUrl.searchParams.set("pipeline_id", pipelineId);
-      searchUrl.searchParams.set("pipeline_stage_id", stageId);
-      const oppRes = await fetch(searchUrl.toString(), { headers: ghlHeaders() });
-      const oppData = await oppRes.json();
-      const id = (oppData.opportunities || [])[0]?.id;
-      const opp = await getFreshOpportunity(id);
-      res.status(200).json({
-        fields: (opp.customFields || []).map((cf) => ({ id: cf.id, value: cf.fieldValue })),
-      });
-      return;
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-      return;
-    }
-  }
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=180");
 
