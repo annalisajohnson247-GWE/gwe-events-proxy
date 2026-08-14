@@ -154,7 +154,7 @@ module.exports = async (req, res) => {
             rsvp_event_date: e.f.event_date || "",
             rsvp_start_time: e.f.start_time || "",
             rsvp_end_time: e.f.end_time || "",
-            rsvp_real_location__address: e.f.real_location__address || "",
+            "rsvp_real_location_/_address": e.f.real_location__address || "",
             rsvp_prep_notes: e.f.prep_notes__what_to_bring || "",
             rsvp_ticket_price: e.f.ticket_price || "",
             rsvp_purchase_link: e.f.purchase_link || "",
