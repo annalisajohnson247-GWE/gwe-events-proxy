@@ -88,6 +88,27 @@ async function getFreshOpportunity(id) {
 }
 
 module.exports = async (req, res) => {
+  if (req.query && req.query.showids === "1") {
+    try {
+      const locationId = process.env.GHL_LOCATION_ID;
+      const { pipelineId, stageId } = await getApprovedStageId(locationId);
+      const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
+      searchUrl.searchParams.set("location_id", locationId);
+      searchUrl.searchParams.set("pipeline_id", pipelineId);
+      searchUrl.searchParams.set("pipeline_stage_id", stageId);
+      const oppRes = await fetch(searchUrl.toString(), { headers: ghlHeaders() });
+      const oppData = await oppRes.json();
+      const id = (oppData.opportunities || [])[0]?.id;
+      const opp = await getFreshOpportunity(id);
+      res.status(200).json({
+        fields: (opp.customFields || []).map((cf) => ({ id: cf.id, value: cf.fieldValue })),
+      });
+      return;
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+      return;
+    }
+  }
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=180");
 
