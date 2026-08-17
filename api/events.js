@@ -22,6 +22,8 @@ const FIELD_IDS = {
   purchase_link: "c2qugZJBIl4w3LfD2PQp",
   max_attendees: "AnMzsPUueUUP8JQp8fAo",
   city: "bowkqeQh2AMCUwsSblIc",
+  event_format: "8KmrXAOffsiMFpDNQMiC",
+  zoom_link: "8n9D7XuJPR3Gv9TsDN1a",
 };
 const ID_TO_KEY = Object.fromEntries(Object.entries(FIELD_IDS).map(([k, v]) => [v, k]));
 
@@ -81,6 +83,17 @@ function classifyEventType(rawType) {
   return { key: "ticketed", badgeClass: "gwe-badge-ticketed", badgeLabel: "Ticket purchase required" };
 }
 
+function classifyEventFormat(rawFormat) {
+  const f = (rawFormat || "").toLowerCase();
+  if (f.includes("hybrid")) {
+    return { key: "hybrid", badgeClass: "gwe-format-hybrid", badgeLabel: "In-Person + Zoom" };
+  }
+  if (f.includes("virtual") || f.includes("zoom")) {
+    return { key: "virtual", badgeClass: "gwe-format-virtual", badgeLabel: "Virtual (Zoom)" };
+  }
+  return { key: "in-person", badgeClass: "gwe-format-inperson", badgeLabel: "In-Person" };
+}
+
 async function getFreshOpportunity(id) {
   const res = await fetch(`${GHL_BASE}/opportunities/${id}`, { headers: ghlHeaders() });
   if (!res.ok) throw new Error(`Get opportunity ${id} failed: ${res.status}`);
@@ -89,27 +102,6 @@ async function getFreshOpportunity(id) {
 }
 
 module.exports = async (req, res) => {
-  if (req.query && req.query.showids === "1") {
-    try {
-      const locationId = process.env.GHL_LOCATION_ID;
-      const { pipelineId, stageId } = await getApprovedStageId(locationId);
-      const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
-      searchUrl.searchParams.set("location_id", locationId);
-      searchUrl.searchParams.set("pipeline_id", pipelineId);
-      searchUrl.searchParams.set("pipeline_stage_id", stageId);
-      const oppRes = await fetch(searchUrl.toString(), { headers: ghlHeaders() });
-      const oppData = await oppRes.json();
-      const id = (oppData.opportunities || [])[0]?.id;
-      const opp = await getFreshOpportunity(id);
-      res.status(200).json({
-        fields: (opp.customFields || []).map((cf) => ({ id: cf.id, value: cf.fieldValue })),
-      });
-      return;
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-      return;
-    }
-  }
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=180");
 
@@ -156,6 +148,7 @@ module.exports = async (req, res) => {
       .sort((a, b) => new Date(a.f.event_date) - new Date(b.f.event_date))
       .map((e) => {
         const type = classifyEventType(e.f.event_type);
+        const format = classifyEventFormat(e.f.event_format);
         const priceRaw = (e.f.ticket_price || "").toString().replace(/^\$/, "").trim();
         const price = type.key === "open" || !priceRaw || priceRaw === "0" ? "FREE" : `$${priceRaw} per person`;
         return {
@@ -163,6 +156,8 @@ module.exports = async (req, res) => {
           eventName: e.f.event_name || "GWE Event",
           badgeClass: type.badgeClass,
           badgeLabel: type.badgeLabel,
+          formatBadgeClass: format.badgeClass,
+          formatBadgeLabel: format.badgeLabel,
           eventDate: e.f.event_date,
           startTime: e.f.start_time || "",
           location: e.f.public_location_label || "",
@@ -180,6 +175,8 @@ module.exports = async (req, res) => {
             rsvp_ticket_price: e.f.ticket_price || "",
             rsvp_purchase_link: e.f.purchase_link || "",
             rsvp_city: e.f.city || "",
+            rsvp_event_format: e.f.event_format || "",
+            rsvp_zoom_link: e.f.zoom_link || "",
           },
         };
       });
